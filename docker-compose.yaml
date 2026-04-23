@@ -1,0 +1,22 @@
+services:
+  vpn:
+    build: .
+    container_name: fortigate-vpn
+    privileged: true
+    stdin_open: true
+    tty: true
+    ports:
+      - "2222:22"
+      - "8020:8021"   # host:8020 -> socat relay -> openfortivpn loopback:8020
+    environment:
+      SSH_PASSWORD: ${SSH_PASSWORD:?Set SSH_PASSWORD in .env}
+      TRUSTED_CERT: ${TRUSTED_CERT:-}
+    command: ["${VPN_HOST:?Set VPN_HOST in .env}"]
+    volumes:
+      - ssh_data:/etc/ssh       # host keys + sshd_config stable identity across restarts
+      - ssh_known_hosts:/root/.ssh  # remembers fingerprints of internal hosts
+    restart: unless-stopped
+
+volumes:
+  ssh_data:
+  ssh_known_hosts:
