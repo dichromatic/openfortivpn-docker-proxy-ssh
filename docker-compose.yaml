@@ -11,6 +11,7 @@ services:
     environment:
       SSH_PASSWORD: ${SSH_PASSWORD:?Set SSH_PASSWORD in .env}
       TRUSTED_CERT: ${TRUSTED_CERT:-}
+      KEEPALIVE: ${KEEPALIVE:-0}
     command: ["${VPN_HOST:?Set VPN_HOST in .env}"]
     volumes:
       - ssh_data:/etc/ssh       # host keys + sshd_config stable identity across restarts

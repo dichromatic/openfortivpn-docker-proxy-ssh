@@ -74,52 +74,72 @@ log "SSH proxy ready on :22"
 CERT_FLAG=""
 [ -n "$TRUSTED_CERT" ] && CERT_FLAG="--trusted-cert $TRUSTED_CERT"
 
-log "Starting openfortivpn -> $*"
+# Keep-alive: disabled by default. Set KEEPALIVE=1 in .env to enable.
+# Pings the ppp0 peer every 25s to prevent idle session timeout.
+if [ "${KEEPALIVE:-0}" = "1" ]; then
+    log "Keep-alive enabled - pinging ppp0 peer every 25s"
+    ( while true; do
+        if ip link show ppp0 >/dev/null 2>&1; then
+            PEER=$(ip addr show ppp0 2>/dev/null | awk '/peer/{gsub(/\/.*/,"",$4); print $4; exit}')
+            [ -n "$PEER" ] && ping -c 1 -W 5 "$PEER" >/dev/null 2>&1
+        fi
+        sleep 25
+    done ) &
+fi
 
-# shellcheck disable=SC2086
-openfortivpn --saml-login -v $CERT_FLAG "$@" 2>&1 | while IFS= read -r line; do
-    TS=$(date '+%Y-%m-%d %H:%M:%S')
+# Reconnect loop - if the session is dropped (FortiGate 30-min limit or otherwise)
+# openfortivpn exits, we wait 5s and start again. SAML auth will be required again.
+while true; do
+    log "Starting openfortivpn -> $*"
 
-    case "$line" in
-        *"Authenticate at '"*)
-            URL=$(printf '%s\n' "$line" | grep -o "https://[^']*")
-            printf '[%s] [AUTH ] SAML login required\n' "$TS"
-            echo ""
-            echo "============================================================"
-            echo "  1. Open in your browser:"
-            echo "     $URL"
-            echo ""
-            echo "  2. Complete SSO. Browser will redirect to 127.0.0.1:8020"
-            echo "     and show an error - that is expected."
-            echo ""
-            echo "  3. Copy the full URL from the address bar and run:"
-            echo "     curl 'http://SERVER_IP:8020/<paste?id=... here>'"
-            echo "============================================================"
-            echo ""
-            ;;
-        *"Processing HTTP SAML"*)
-            printf '[%s] [AUTH ] SAML token received\n' "$TS" ;;
-        *"Tunnel is up"*|*"tunnel is up"*)
-            printf '[%s] [UP   ] %s\n' "$TS" "$line" ;;
-        *"ppp"*"up"*|*"Interface"*"up"*)
-            printf '[%s] [PPP  ] %s\n' "$TS" "$line" ;;
-        *"Adding route"*|*"route"*)
-            printf '[%s] [ROUTE] %s\n' "$TS" "$line" ;;
-        *"DNS"*)
-            printf '[%s] [DNS  ] %s\n' "$TS" "$line" ;;
-        *"Logged in"*|*"logged in"*)
-            printf '[%s] [AUTH ] %s\n' "$TS" "$line" ;;
-        *"ERROR"*|*"error"*)
-            printf '[%s] [ERROR] %s\n' "$TS" "$line" ;;
-        *"WARN"*|*"warn"*)
-            printf '[%s] [WARN ] %s\n' "$TS" "$line" ;;
-        *"Disconnected"*|*"disconnected"*|*"closed"*)
-            printf '[%s] [DOWN ] %s\n' "$TS" "$line" ;;
-        *"INFO"*)
-            printf '[%s] [INFO ] %s\n' "$TS" "${line#*INFO:  }" ;;
-        *)
-            printf '[%s] [VPN  ] %s\n' "$TS" "$line" ;;
-    esac
+    # shellcheck disable=SC2086
+    openfortivpn --saml-login -v $CERT_FLAG "$@" 2>&1 | while IFS= read -r line; do
+        TS=$(date '+%Y-%m-%d %H:%M:%S')
+
+        case "$line" in
+            *"Authenticate at '"*)
+                URL=$(printf '%s\n' "$line" | grep -o "https://[^']*")
+                printf '[%s] [AUTH ] SAML login required\n' "$TS"
+                echo ""
+                echo "============================================================"
+                echo "  1. Open in your browser:"
+                echo "     $URL"
+                echo ""
+                echo "  2. Complete SSO. Browser will redirect to 127.0.0.1:8020"
+                echo "     and show an error - that is expected."
+                echo ""
+                echo "  3. Copy the full URL from the address bar and run:"
+                echo "     curl 'http://SERVER_IP:8020/<paste?id=... here>'"
+                echo "============================================================"
+                echo ""
+                ;;
+            *"Processing HTTP SAML"*)
+                printf '[%s] [AUTH ] SAML token received\n' "$TS" ;;
+            *"Tunnel is up"*|*"tunnel is up"*)
+                printf '[%s] [UP   ] %s\n' "$TS" "$line" ;;
+            *"ppp"*"up"*|*"Interface"*"up"*)
+                printf '[%s] [PPP  ] %s\n' "$TS" "$line" ;;
+            *"Adding route"*|*"route"*)
+                printf '[%s] [ROUTE] %s\n' "$TS" "$line" ;;
+            *"DNS"*)
+                printf '[%s] [DNS  ] %s\n' "$TS" "$line" ;;
+            *"Logged in"*|*"logged in"*)
+                printf '[%s] [AUTH ] %s\n' "$TS" "$line" ;;
+            *"ERROR"*|*"error"*)
+                printf '[%s] [ERROR] %s\n' "$TS" "$line" ;;
+            *"WARN"*|*"warn"*)
+                printf '[%s] [WARN ] %s\n' "$TS" "$line" ;;
+            *"Disconnected"*|*"disconnected"*|*"closed"*)
+                printf '[%s] [DOWN ] %s\n' "$TS" "$line" ;;
+            *"INFO"*)
+                printf '[%s] [INFO ] %s\n' "$TS" "${line#*INFO:  }" ;;
+            *)
+                printf '[%s] [VPN  ] %s\n' "$TS" "$line" ;;
+        esac
+    done
+
+    log "VPN exited - reconnecting in 5s..."
+    sleep 5
 done
 EOF
 
